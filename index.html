@@ -96,6 +96,28 @@ function capture() {
 
   ctx.drawImage(video, 0, 0);
   outCtx.drawImage(canvas, 0, 0);
+ // 新增：縮小圖像到可處理範圍（保持比例）
+  const MAX_WIDTH = 960;  // 或 800 / 1200 都可，視你的手機調整
+  if (canvas.width > MAX_WIDTH) {
+    const ratio = MAX_WIDTH / canvas.width;
+    const newHeight = canvas.height * ratio;
+
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = MAX_WIDTH;
+    tempCanvas.height = newHeight;
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.drawImage(canvas, 0, 0, MAX_WIDTH, newHeight);
+
+    // 覆蓋原 canvas
+    canvas.width = MAX_WIDTH;
+    canvas.height = newHeight;
+    ctx.drawImage(tempCanvas, 0, 0);
+  }
+
+  // 同步設定 output
+  outputCanvas.width = canvas.width;
+  outputCanvas.height = canvas.height;
+  outCtx.drawImage(canvas, 0, 0);
   STATUS.textContent = `已拍照！  ${canvas.width}×${canvas.height}`;
 }
 
@@ -113,13 +135,13 @@ function detectStraightEdges() {
   let thresh = new cv.Mat();
 
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-  cv.GaussianBlur(gray, blurred, new cv.Size(5,5), 0);
+  cv.GaussianBlur(gray, blurred, new cv.Size(3,3), 0);
   cv.adaptiveThreshold(blurred, thresh, 255,
-    cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
+    cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 9, 3);
 
   let contours = new cv.MatVector();
   let hierarchy = new cv.Mat();
-  cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
+  cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
   // 先把原始拍照畫回去，準備標記
   outCtx.drawImage(canvas, 0, 0);
