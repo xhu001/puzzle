@@ -1,152 +1,29 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html>
 <head>
-<meta charset="utf-8">
-<title>Puzzle Edge Detector – iPhone Stable</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<style>
-body {
-  margin: 0;
-  background: black;
-  overflow: hidden;
-}
-#startBtn {
-  position: fixed;
-  z-index: 10;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 10px 16px;
-  font-size: 16px;
-}
-canvas {
-  position: absolute;
-  top: 0;
-  left: 0;
-}
-video {
-  display: none;
-}
-</style>
 </head>
+<body style="margin:0;background:black">
 
-<body>
+<button id="btn" style="font-size:20px">Start Camera</button>
+<br><br>
 
-<button id="startBtn">Start Camera</button>
-<video id="video" playsinline muted></video>
-<canvas id="canvas"></canvas>
-
-<script>
-let video = document.getElementById("video");
-let canvas = document.getElementById("canvas");
-let ctx = canvas.getContext("2d");
-
-let streaming = false;
-let timer = null;
-
-// OpenCV mats（只创建一次）
-let src, gray, edges;
-
-// 等 OpenCV.js 加载完成
-function onOpenCvReady() {
-  console.log("OpenCV ready");
-}
-
-</script>
-
-<script src="https://docs.opencv.org/4.x/opencv.js"
-        onload="onOpenCvReady();"></script>
+<video id="video"
+       autoplay
+       playsinline
+       muted
+       style="width:100vw;height:auto"></video>
 
 <script>
-document.getElementById("startBtn").onclick = startCamera;
-
-function startCamera() {
-  navigator.mediaDevices.getUserMedia({
+document.getElementById("btn").onclick = async () => {
+  const video = document.getElementById("video");
+  const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: "environment" },
     audio: false
-  }).then(stream => {
-    video.srcObject = stream;
-    video.play();
   });
-}
-
-video.addEventListener("loadedmetadata", () => {
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-
-  // 初始化 OpenCV Mat（一次性）
-  src = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC4);
-  gray = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC1);
-  edges = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC1);
-
-  streaming = true;
-
-  // iOS 上用 setInterval 比 RAF 稳
-  timer = setInterval(processFrame, 80); // ~12 FPS
-});
-
-function processFrame() {
-  if (!streaming) return;
-
-  // 画视频帧
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-  // OpenCV 读取
-  cv.imread(canvas, src);
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-  cv.Canny(gray, edges, 80, 150);
-
-  let contours = new cv.MatVector();
-  let hierarchy = new cv.Mat();
-  cv.findContours(edges, contours, hierarchy,
-                  cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
-
-  for (let i = 0; i < contours.size(); i++) {
-    let c = contours.get(i);
-    let area = cv.contourArea(c);
-
-    if (area < 2500) continue;
-
-    if (hasStraightApprox(c)) {
-      cv.drawContours(
-        src, contours, i,
-        new cv.Scalar(255, 0, 0, 255), 3
-      );
-    }
-  }
-
-  cv.imshow(canvas, src);
-  contours.delete();
-  hierarchy.delete();
-}
-
-// 简化直线性判断（iPhone 安全）
-function hasStraightApprox(contour) {
-  let step = 20;
-  let eps = 2.0;
-
-  for (let i = 0; i + step < contour.total(); i += step) {
-    let p0 = contour.get(i);
-    let p1 = contour.get(i + step);
-
-    let dx = p1.x - p0.x;
-    let dy = p1.y - p0.y;
-    let len = Math.hypot(dx, dy);
-    if (len < 30) continue;
-
-    let total = 0;
-    for (let j = 0; j < step; j++) {
-      let p = contour.get(i + j);
-      let d = Math.abs(dy * (p.x - p0.x) - dx * (p.y - p0.y)) / len;
-      total += d;
-    }
-    if (total / step < eps) {
-      return true;
-    }
-  }
-  return false;
-}
+  video.srcObject = stream;
+  video.play();
+};
 </script>
 
 </body>
