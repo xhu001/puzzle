@@ -28,51 +28,57 @@ button {
   border: none;
   border-radius: 8px;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
 }
-button:active {
-  background: #0051D5;
+.mode-btns {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: none;
+}
+.mode-btns.active {
+  display: flex;
+  gap: 5px;
+}
+.mode-btn {
+  background: #444;
+  border: none;
+  color: white;
+  padding: 10px 15px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+.mode-btn.active {
+  background: #007AFF;
 }
 #controls {
   position: fixed;
-  top: 80px;
+  top: 140px;
   left: 10px;
   right: 10px;
   z-index: 10;
   display: none;
-  max-height: 60vh;
-  overflow-y: auto;
 }
 #controls.active {
   display: block;
 }
-.control-group {
+.slider-group {
   background: rgba(0,0,0,0.85);
-  padding: 10px;
-  margin-bottom: 5px;
+  padding: 12px;
+  margin-bottom: 8px;
   border-radius: 8px;
   color: white;
-  font-size: 12px;
+  font-size: 14px;
 }
-.control-group label {
+.slider-group label {
   display: block;
-  margin-bottom: 5px;
+  margin-bottom: 8px;
+  font-weight: bold;
 }
-.control-group input[type="range"] {
+.slider-group input[type="range"] {
   width: 100%;
-}
-.toggle-btn {
-  background: #444;
-  border: none;
-  color: white;
-  padding: 8px 12px;
-  border-radius: 4px;
-  font-size: 12px;
-  margin-right: 5px;
-  margin-top: 5px;
-}
-.toggle-btn.active {
-  background: #007AFF;
+  height: 30px;
 }
 #status {
   position: fixed;
@@ -80,12 +86,13 @@ button:active {
   left: 10px;
   right: 10px;
   color: white;
-  background: rgba(0,0,0,0.85);
-  padding: 12px;
+  background: rgba(0,0,0,0.9);
+  padding: 15px;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 14px;
   z-index: 10;
-  line-height: 1.4;
+  line-height: 1.6;
+  font-family: monospace;
 }
 canvas { 
   position: absolute; 
@@ -104,30 +111,24 @@ video {
 <div id="container">
   <button id="start">启动摄像头</button>
   
+  <div class="mode-btns">
+    <button class="mode-btn active" data-mode="original">原图</button>
+    <button class="mode-btn" data-mode="threshold">阈值</button>
+    <button class="mode-btn" data-mode="contours">轮廓</button>
+  </div>
+  
   <div id="controls">
-    <div class="control-group">
-      <label>最小面积: <span id="minAreaVal">50</span>px²</label>
-      <input type="range" id="minArea" min="20" max="500" value="50" step="10">
+    <div class="slider-group">
+      <label>阈值: <span id="threshVal">127</span></label>
+      <input type="range" id="threshold" min="50" max="200" value="127" step="1">
     </div>
-    <div class="control-group">
-      <label>最大面积: <span id="maxAreaVal">5000</span>px²</label>
-      <input type="range" id="maxArea" min="500" max="20000" value="5000" step="500">
+    <div class="slider-group">
+      <label>最小面积: <span id="minAreaVal">10</span> px²</label>
+      <input type="range" id="minArea" min="1" max="200" value="10" step="1">
     </div>
-    <div class="control-group">
-      <label>边缘检测: <span id="cannyLowVal">20</span> / <span id="cannyHighVal">60</span></label>
-      <input type="range" id="cannyLow" min="5" max="100" value="20" step="5">
-      <input type="range" id="cannyHigh" min="30" max="200" value="60" step="10">
-    </div>
-    <div class="control-group">
-      <label>
-        <input type="checkbox" id="adaptiveThresh" checked> 使用自适应阈值
-      </label>
-    </div>
-    <div class="control-group">
-      显示模式:
-      <button class="toggle-btn" data-mode="normal">仅边块</button>
-      <button class="toggle-btn active" data-mode="all">所有拼图</button>
-      <button class="toggle-btn" data-mode="edges">边缘图</button>
+    <div class="slider-group">
+      <label>最大面积: <span id="maxAreaVal">10000</span> px²</label>
+      <input type="range" id="maxArea" min="1000" max="50000" value="10000" step="100">
     </div>
   </div>
   
@@ -142,16 +143,14 @@ let streaming = false;
 let processingInterval = null;
 
 // OpenCV Mats
-let src, gray, edges, blurred, thresh;
+let src, gray, thresh;
 
 // 参数
 let params = {
-  minArea: 50,
-  maxArea: 5000,
-  cannyLow: 20,
-  cannyHigh: 60,
-  displayMode: 'all',
-  useAdaptive: true
+  displayMode: 'original',
+  thresholdValue: 127,
+  minArea: 10,
+  maxArea: 10000
 };
 
 const video = document.getElementById("video");
@@ -160,8 +159,23 @@ const ctx = canvas.getContext("2d", { willReadFrequently: true });
 const startBtn = document.getElementById("start");
 const statusDiv = document.getElementById("status");
 const controlsDiv = document.getElementById("controls");
+const modeBtns = document.querySelector('.mode-btns');
+
+// 模式切换
+document.querySelectorAll('.mode-btn').forEach(btn => {
+  btn.onclick = function() {
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    this.classList.add('active');
+    params.displayMode = this.dataset.mode;
+  };
+});
 
 // 控制参数
+document.getElementById("threshold").oninput = function() {
+  params.thresholdValue = parseInt(this.value);
+  document.getElementById("threshVal").textContent = this.value;
+};
+
 document.getElementById("minArea").oninput = function() {
   params.minArea = parseInt(this.value);
   document.getElementById("minAreaVal").textContent = this.value;
@@ -171,29 +185,6 @@ document.getElementById("maxArea").oninput = function() {
   params.maxArea = parseInt(this.value);
   document.getElementById("maxAreaVal").textContent = this.value;
 };
-
-document.getElementById("cannyLow").oninput = function() {
-  params.cannyLow = parseInt(this.value);
-  document.getElementById("cannyLowVal").textContent = this.value;
-};
-
-document.getElementById("cannyHigh").oninput = function() {
-  params.cannyHigh = parseInt(this.value);
-  document.getElementById("cannyHighVal").textContent = this.value;
-};
-
-document.getElementById("adaptiveThresh").onchange = function() {
-  params.useAdaptive = this.checked;
-};
-
-// 显示模式切换
-document.querySelectorAll('.toggle-btn').forEach(btn => {
-  btn.onclick = function() {
-    document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
-    this.classList.add('active');
-    params.displayMode = this.dataset.mode;
-  };
-});
 
 // 动态加载 OpenCV.js
 function loadOpenCV() {
@@ -206,7 +197,7 @@ function loadOpenCV() {
       if (typeof cv !== 'undefined') {
         cv.onRuntimeInitialized = () => {
           opencvReady = true;
-          statusDiv.textContent = 'OpenCV 已加载 - 点击按钮开始';
+          statusDiv.textContent = 'OpenCV 已加载\n点击按钮启动摄像头';
           resolve();
         };
       } else {
@@ -222,7 +213,7 @@ function loadOpenCV() {
 // 启动摄像头
 startBtn.onclick = async () => {
   if (!opencvReady) {
-    statusDiv.textContent = '请等待 OpenCV 加载完成...';
+    alert('请等待 OpenCV 加载完成');
     return;
   }
   
@@ -244,6 +235,7 @@ startBtn.onclick = async () => {
     };
     
     startBtn.style.display = 'none';
+    modeBtns.classList.add('active');
     controlsDiv.classList.add('active');
     
   } catch (e) {
@@ -257,19 +249,15 @@ video.addEventListener("playing", () => {
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   
-  statusDiv.textContent = `初始化中 (${canvas.width}x${canvas.height})`;
-  
   try {
     src = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC4);
     gray = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC1);
-    edges = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC1);
-    blurred = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC1);
     thresh = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC1);
     
     streaming = true;
     
     if (processingInterval) clearInterval(processingInterval);
-    processingInterval = setInterval(processFrame, 150);
+    processingInterval = setInterval(processFrame, 200); // 5 FPS 便于观察
     
   } catch (e) {
     statusDiv.textContent = '初始化错误: ' + e.message;
@@ -284,205 +272,77 @@ function processFrame() {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     cv.imread(canvas, src);
     
-    // 转灰度
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-    
-    // 高斯模糊
-    cv.GaussianBlur(gray, blurred, new cv.Size(3, 3), 0);
-    
-    // 使用自适应阈值或 Canny
-    if (params.useAdaptive) {
-      // 自适应阈值效果更好
-      cv.adaptiveThreshold(blurred, thresh, 255, 
-        cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
-      
-      // 形态学操作清理噪声
-      let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(2, 2));
-      cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel);
-      cv.morphologyEx(thresh, thresh, cv.MORPH_OPEN, kernel);
-      kernel.delete();
-      
-      edges.delete();
-      edges = thresh.clone();
-    } else {
-      // Canny 边缘检测
-      cv.Canny(blurred, edges, params.cannyLow, params.cannyHigh);
-    }
-    
-    // 显示边缘模式
-    if (params.displayMode === 'edges') {
-      cv.imshow(canvas, edges);
-      statusDiv.textContent = '边缘检测视图 - 白色区域应包含拼图边界';
+    // 显示原图模式
+    if (params.displayMode === 'original') {
+      cv.imshow(canvas, src);
+      statusDiv.innerHTML = `分辨率: ${canvas.width} x ${canvas.height}\n模式: 原始画面\n\n请切换到"阈值"模式查看二值化效果`;
       return;
     }
     
-    // 查找轮廓
+    // 转灰度
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    
+    // 二值化
+    cv.threshold(gray, thresh, params.thresholdValue, 255, cv.THRESH_BINARY);
+    
+    // 显示阈值模式
+    if (params.displayMode === 'threshold') {
+      cv.imshow(canvas, thresh);
+      statusDiv.innerHTML = `分辨率: ${canvas.width} x ${canvas.height}\n模式: 二值化\n阈值: ${params.thresholdValue}\n\n白色=前景 黑色=背景\n调整阈值让拼图显示为白色`;
+      return;
+    }
+    
+    // 轮廓模式
     let contours = new cv.MatVector();
     let hierarchy = new cv.Mat();
-    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
     
     // 重新绘制原图
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    let totalContours = contours.size();
-    let validContours = 0;
-    let straightEdgeCount = 0;
+    let total = contours.size();
+    let validCount = 0;
+    let areaList = [];
     
-    // 分析所有轮廓
-    let puzzlePieces = [];
-    
-    for (let i = 0; i < totalContours; i++) {
+    for (let i = 0; i < total; i++) {
       let contour = contours.get(i);
       let area = cv.contourArea(contour);
       
-      // 面积过滤 - 针对小拼图
-      if (area < params.minArea || area > params.maxArea) {
-        continue;
-      }
-      
-      validContours++;
-      
-      // 分析形状
-      let hasStraight = analyzeShape(contour, area);
-      
-      puzzlePieces.push({
-        contour: contour,
-        area: area,
-        hasStraight: hasStraight
-      });
-    }
-    
-    // 绘制结果
-    for (let piece of puzzlePieces) {
-      if (params.displayMode === 'all') {
-        // 显示所有拼图
-        if (piece.hasStraight) {
-          straightEdgeCount++;
-          drawContour(piece.contour, 'rgba(0, 255, 0, 0.9)', 3);
-          ctx.fillStyle = 'rgba(0, 255, 0, 0.25)';
-        } else {
-          drawContour(piece.contour, 'rgba(255, 165, 0, 0.8)', 2);
-          ctx.fillStyle = 'rgba(255, 165, 0, 0.15)';
+      if (area >= params.minArea && area <= params.maxArea) {
+        validCount++;
+        areaList.push(Math.round(area));
+        
+        // 绘制所有有效轮廓
+        ctx.strokeStyle = 'rgba(0, 255, 0, 0.9)';
+        ctx.lineWidth = 3;
+        ctx.fillStyle = 'rgba(0, 255, 0, 0.2)';
+        ctx.beginPath();
+        
+        for (let j = 0; j < contour.data32S.length; j += 2) {
+          let x = contour.data32S[j];
+          let y = contour.data32S[j + 1];
+          if (j === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
         }
-        fillContour(piece.contour);
-      } else if (params.displayMode === 'normal' && piece.hasStraight) {
-        // 只显示边块
-        straightEdgeCount++;
-        drawContour(piece.contour, 'rgba(0, 255, 0, 0.9)', 3);
-        ctx.fillStyle = 'rgba(0, 255, 0, 0.25)';
-        fillContour(piece.contour);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.fill();
       }
     }
     
-    // 更新状态信息
-    let statusText = `检测: ${totalContours}个轮廓 | 有效: ${validContours}个拼图`;
-    statusText += `\n绿色=${straightEdgeCount}个边块 | 橙色=${validContours - straightEdgeCount}个内部块`;
-    statusDiv.innerHTML = statusText.replace('\n', '<br>');
+    // 排序面积列表
+    areaList.sort((a, b) => b - a);
+    let topAreas = areaList.slice(0, 5).join(', ');
+    
+    statusDiv.innerHTML = `分辨率: ${canvas.width} x ${canvas.height}\n模式: 轮廓检测\n\n总轮廓: ${total}\n有效轮廓: ${validCount}\n面积范围: ${params.minArea} - ${params.maxArea} px²\n最大5个面积: ${topAreas || '无'}\n\n${validCount === 0 ? '⚠️ 没检测到！调整阈值或面积范围' : '✅ 检测到 ' + validCount + ' 个物体'}`;
     
     contours.delete();
     hierarchy.delete();
     
   } catch (e) {
-    console.error('处理错误:', e);
-    statusDiv.textContent = '错误: ' + e.message;
+    console.error('错误:', e);
+    statusDiv.textContent = '处理错误: ' + e.message;
   }
-}
-
-// 分析形状 - 针对小拼图优化
-function analyzeShape(contour, area) {
-  // 方法1: 多边形近似
-  let approx = new cv.Mat();
-  let perimeter = cv.arcLength(contour, true);
-  cv.approxPolyDP(contour, approx, 0.02 * perimeter, true);
-  
-  let hasStraight = false;
-  let vertices = approx.rows;
-  
-  // 拼图块通常有4-10个顶点
-  if (vertices >= 3 && vertices <= 10) {
-    // 检查边长
-    for (let i = 0; i < vertices; i++) {
-      let x1 = approx.data32S[i * 2];
-      let y1 = approx.data32S[i * 2 + 1];
-      let x2 = approx.data32S[((i + 1) % vertices) * 2];
-      let y2 = approx.data32S[((i + 1) % vertices) * 2 + 1];
-      
-      let edgeLen = Math.hypot(x2 - x1, y2 - y1);
-      
-      // 如果有边长超过周长的10%
-      if (edgeLen > perimeter * 0.1) {
-        // 检查这条边是否足够直（相对于其他边）
-        let avgEdgeLen = perimeter / vertices;
-        if (edgeLen > avgEdgeLen * 1.2) {
-          hasStraight = true;
-          break;
-        }
-      }
-    }
-  }
-  
-  // 方法2: 矩形拟合
-  if (!hasStraight) {
-    let rect = cv.minAreaRect(contour);
-    let boxArea = rect.size.width * rect.size.height;
-    let extent = area / boxArea; // 填充度
-    
-    // 如果形状接近矩形（填充度高）
-    if (extent > 0.7) {
-      hasStraight = true;
-    }
-  }
-  
-  // 方法3: 凸包检测
-  if (!hasStraight && vertices >= 4) {
-    let hull = new cv.Mat();
-    cv.convexHull(contour, hull);
-    let hullArea = cv.contourArea(hull);
-    let solidity = area / hullArea;
-    
-    // 如果凸度高（形状规整）
-    if (solidity > 0.85 && vertices <= 6) {
-      hasStraight = true;
-    }
-    hull.delete();
-  }
-  
-  approx.delete();
-  return hasStraight;
-}
-
-// 绘制轮廓
-function drawContour(contour, color, width) {
-  ctx.strokeStyle = color;
-  ctx.lineWidth = width;
-  ctx.beginPath();
-  
-  for (let i = 0; i < contour.data32S.length; i += 2) {
-    let x = contour.data32S[i];
-    let y = contour.data32S[i + 1];
-    
-    if (i === 0) {
-      ctx.moveTo(x, y);
-    } else {
-      ctx.lineTo(x, y);
-    }
-  }
-  
-  ctx.closePath();
-  ctx.stroke();
-}
-
-// 填充轮廓
-function fillContour(contour) {
-  ctx.beginPath();
-  for (let i = 0; i < contour.data32S.length; i += 2) {
-    let x = contour.data32S[i];
-    let y = contour.data32S[i + 1];
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-  ctx.fill();
 }
 
 // 清理资源
@@ -490,15 +350,12 @@ window.addEventListener('beforeunload', () => {
   if (processingInterval) clearInterval(processingInterval);
   if (src) src.delete();
   if (gray) gray.delete();
-  if (edges) edges.delete();
-  if (blurred) blurred.delete();
   if (thresh) thresh.delete();
 });
 
-// 页面加载时初始化
+// 页面加载
 loadOpenCV().catch(e => {
-  statusDiv.textContent = 'OpenCV 加载失败: ' + e.message;
-  alert('OpenCV 加载失败，请刷新页面重试');
+  statusDiv.textContent = 'OpenCV 加载失败，请刷新页面';
 });
 </script>
 </body>
