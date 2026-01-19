@@ -1,0 +1,115 @@
+
+
+ 
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>Puzzle Edge Detector (MVP)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+
+<style>
+  body { margin: 0; background: #000; }
+  canvas { position: absolute; top: 0; left: 0; }
+  video { display: none; }
+</style>
+</head>
+
+<body>
+
+<video id="video" autoplay playsinline></video>
+<canvas id="canvas"></canvas>
+
+<script>
+let video = document.getElementById("video");
+let canvas = document.getElementById("canvas");
+let ctx = canvas.getContext("2d");
+
+let streaming = false;
+
+navigator.mediaDevices.getUserMedia({
+    video: { facingMode: "environment" },
+    audio: false
+}).then(stream => {
+    video.srcObject = stream;
+}).catch(err => {
+    alert("无法访问摄像头");
+});
+
+function isContourHasStraightSegment(contour) {
+    const windowSize = 15;
+    const eps = 2.0;
+
+    for (let i = 0; i + windowSize < contour.total(); i++) {
+        let pts = [];
+        for (let j = 0; j < windowSize; j++) {
+            pts.push(contour.get(i + j));
+        }
+
+        let vx = 0, vy = 0, x0 = 0, y0 = 0;
+        cv.fitLine(pts, cv.DIST_L2, 0, 0.01, 0.01, {vx, vy, x0, y0});
+
+        let total = 0;
+        for (let p of pts) {
+            let d = Math.abs(vy * (p.x - x0) - vx * (p.y - y0));
+            total += d;
+        }
+
+        if (total / pts.length < eps) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function processFrame() {
+    if (!streaming) return;
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    let src = cv.imread(canvas);
+    let gray = new cv.Mat();
+    let blur = new cv.Mat();
+    let edges = new cv.Mat();
+
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+    cv.Canny(blur, edges, 80, 150);
+
+    let contours = new cv.MatVector();
+    let hierarchy = new cv.Mat();
+    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
+
+    for (let i = 0; i < contours.size(); i++) {
+        let c = contours.get(i);
+        let area = cv.contourArea(c);
+
+        if (area < 2000) continue;
+
+        if (isContourHasStraightSegment(c)) {
+            cv.drawContours(src, contours, i, new cv.Scalar(0, 0, 255, 255), 3);
+        }
+    }
+
+    cv.imshow(canvas, src);
+
+    src.delete(); gray.delete(); blur.delete(); edges.delete();
+    contours.delete(); hierarchy.delete();
+
+    requestAnimationFrame(processFrame);
+}
+
+video.addEventListener("canplay", () => {
+    if (!streaming) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        streaming = true;
+        requestAnimationFrame(processFrame);
+    }
+});
+</script>
+
+</body>
+</html>
