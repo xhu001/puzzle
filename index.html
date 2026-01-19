@@ -7,9 +7,10 @@ body { margin:0; background:black; }
 button {
   position:fixed; top:10px; left:50%;
   transform:translateX(-50%);
-  font-size:18px;
+  font-size:18px; z-index:10;
 }
-canvas { width:100vw; height:auto; }
+canvas { position:absolute; top:0; left:0; }
+video { display:none; }
 </style>
 </head>
 <body>
@@ -18,31 +19,107 @@ canvas { width:100vw; height:auto; }
 <video id="video" playsinline muted></video>
 <canvas id="canvas"></canvas>
 
+<script src="https://docs.opencv.org/4.x/opencv.js" onload="console.log('OpenCV.js loaded')"></script>
+
 <script>
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
+let streaming = false;
+
+// OpenCV Mats（只创建一次）
+let src, gray, edges;
+
 document.getElementById("start").onclick = async () => {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: "environment" },
-    audio: false
-  });
-  video.srcObject = stream;
-  await video.play();
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+  } catch (e) {
+    alert("Camera error: " + e.message);
+  }
 };
 
 video.addEventListener("playing", () => {
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
 
-  function draw() {
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    requestAnimationFrame(draw);
-  }
-  draw();
+  // 初始化 OpenCV Mats（只创建一次）
+  src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
+  gray = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC1);
+  edges = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC1);
+
+  streaming = true;
+
+  // setInterval 保险方案，iPhone Safari 更稳定
+  setInterval(processFrame, 80); // ~12 FPS
 });
+
+function processFrame() {
+  if (!streaming) return;
+
+  // 1️⃣ 绘制视频到 canvas
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  // 2️⃣ OpenCV 处理
+  cv.imread(canvas, src);
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+  cv.Canny(gray, edges, 80, 150);
+
+  // 3️⃣ 查找轮廓
+  let contours = new cv.MatVector();
+  let hierarchy = new cv.Mat();
+  cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
+
+  // 4️⃣ 遍历轮廓，简单筛选
+  for (let i = 0; i < contours.size(); i++) {
+    let c = contours.get(i);
+    let area = cv.contourArea(c);
+
+    if (area < 2500) continue; // 面积太小，忽略
+
+    if (hasStraightApprox(c)) {
+      // 高亮可能的边块
+      cv.drawContours(src, contours, i, new cv.Scalar(255, 0, 0, 255), 3);
+    }
+  }
+
+  cv.imshow(canvas, src);
+
+  contours.delete();
+  hierarchy.delete();
+}
+
+// 简化直线性判断（安全 iPhone）
+function hasStraightApprox(contour) {
+  let step = 20;
+  let eps = 2.0;
+
+  for (let i = 0; i + step < contour.total(); i += step) {
+    let p0 = contour.get(i);
+    let p1 = contour.get(i + step);
+
+    let dx = p1.x - p0.x;
+    let dy = p1.y - p0.y;
+    let len = Math.hypot(dx, dy);
+    if (len < 30) continue;
+
+    let total = 0;
+    for (let j = 0; j < step; j++) {
+      let p = contour.get(i + j);
+      let d = Math.abs(dy * (p.x - p0.x) - dx * (p.y - p0.y)) / len;
+      total += d;
+    }
+    if (total / step < eps) return true;
+  }
+  return false;
+}
 </script>
 
 </body>
 </html>
+ 
