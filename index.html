@@ -1,125 +1,307 @@
-<!DOCTYPE html>
+ <!DOCTYPE html>
 <html>
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <style>
-body { margin:0; background:black; }
-button {
-  position:fixed; top:10px; left:50%;
-  transform:translateX(-50%);
-  font-size:18px; z-index:10;
+body { 
+  margin: 0; 
+  background: #000; 
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
 }
-canvas { position:absolute; top:0; left:0; }
-video { display:none; }
+#container {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+}
+button {
+  position: fixed; 
+  top: 20px; 
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 18px; 
+  padding: 12px 24px;
+  z-index: 10;
+  background: #007AFF;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+button:active {
+  background: #0051D5;
+}
+#status {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: white;
+  background: rgba(0,0,0,0.7);
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 14px;
+  z-index: 10;
+}
+canvas { 
+  position: absolute; 
+  top: 0; 
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+video { 
+  display: none; 
+}
 </style>
 </head>
 <body>
-
-<button id="start">Start Camera</button>
-<video id="video" playsinline muted></video>
-<canvas id="canvas"></canvas>
-
-<script src="https://docs.opencv.org/4.x/opencv.js" onload="console.log('OpenCV.js loaded')"></script>
+<div id="container">
+  <button id="start">启动摄像头</button>
+  <div id="status">等待 OpenCV 加载...</div>
+  <video id="video" playsinline muted autoplay></video>
+  <canvas id="canvas"></canvas>
+</div>
 
 <script>
+let opencvReady = false;
+let streaming = false;
+let processingInterval = null;
+
+// OpenCV Mats
+let src, gray, edges, contours, hierarchy;
+
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
+const ctx = canvas.getContext("2d", { willReadFrequently: true });
+const startBtn = document.getElementById("start");
+const statusDiv = document.getElementById("status");
 
-let streaming = false;
+// 动态加载 OpenCV.js
+function loadOpenCV() {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://docs.opencv.org/4.x/opencv.js';
+    script.async = true;
+    
+    script.onload = () => {
+      // OpenCV.js 需要额外的初始化时间
+      if (typeof cv !== 'undefined') {
+        cv.onRuntimeInitialized = () => {
+          opencvReady = true;
+          statusDiv.textContent = 'OpenCV 已加载 - 点击按钮开始';
+          resolve();
+        };
+      } else {
+        reject(new Error('OpenCV 加载失败'));
+      }
+    };
+    
+    script.onerror = () => reject(new Error('OpenCV 脚本加载失败'));
+    document.head.appendChild(script);
+  });
+}
 
-// OpenCV Mats（只创建一次）
-let src, gray, edges;
-
-document.getElementById("start").onclick = async () => {
+// 启动摄像头
+startBtn.onclick = async () => {
+  if (!opencvReady) {
+    statusDiv.textContent = '请等待 OpenCV 加载完成...';
+    return;
+  }
+  
   try {
+    statusDiv.textContent = '正在启动摄像头...';
+    
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" },
+      video: { 
+        facingMode: "environment",
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      },
       audio: false
     });
+    
     video.srcObject = stream;
-    await video.play();
+    video.onloadedmetadata = () => {
+      video.play();
+    };
+    
+    startBtn.style.display = 'none';
+    
   } catch (e) {
-    alert("Camera error: " + e.message);
+    statusDiv.textContent = '摄像头错误: ' + e.message;
+    alert("无法访问摄像头: " + e.message);
   }
 };
 
+// 视频开始播放
 video.addEventListener("playing", () => {
+  // 设置 canvas 尺寸
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
-
-  // 初始化 OpenCV Mats（只创建一次）
-  src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
-  gray = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC1);
-  edges = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC1);
-
-  streaming = true;
-
-  // setInterval 保险方案，iPhone Safari 更稳定
-  setInterval(processFrame, 80); // ~12 FPS
+  
+  statusDiv.textContent = `检测中 (${canvas.width}x${canvas.height})`;
+  
+  // 初始化 OpenCV Mats
+  try {
+    src = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC4);
+    gray = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC1);
+    edges = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC1);
+    contours = new cv.MatVector();
+    hierarchy = new cv.Mat();
+    
+    streaming = true;
+    
+    // 使用 setInterval，在 iPhone Safari 上更稳定
+    if (processingInterval) clearInterval(processingInterval);
+    processingInterval = setInterval(processFrame, 100); // 10 FPS
+    
+  } catch (e) {
+    statusDiv.textContent = '初始化错误: ' + e.message;
+  }
 });
 
 function processFrame() {
-  if (!streaming) return;
-
-  // 1️⃣ 绘制视频到 canvas
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-  // 2️⃣ OpenCV 处理
-  cv.imread(canvas, src);
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-  cv.Canny(gray, edges, 80, 150);
-
-  // 3️⃣ 查找轮廓
-  let contours = new cv.MatVector();
-  let hierarchy = new cv.Mat();
-  cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
-
-  // 4️⃣ 遍历轮廓，简单筛选
-  for (let i = 0; i < contours.size(); i++) {
-    let c = contours.get(i);
-    let area = cv.contourArea(c);
-
-    if (area < 2500) continue; // 面积太小，忽略
-
-    if (hasStraightApprox(c)) {
-      // 高亮可能的边块
-      cv.drawContours(src, contours, i, new cv.Scalar(255, 0, 0, 255), 3);
+  if (!streaming || !opencvReady) return;
+  
+  try {
+    // 1. 绘制视频帧到 canvas
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    
+    // 2. 读取图像数据
+    cv.imread(canvas, src);
+    
+    // 3. 转灰度
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    
+    // 4. 高斯模糊减少噪声
+    cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
+    
+    // 5. Canny 边缘检测
+    cv.Canny(gray, edges, 50, 150);
+    
+    // 6. 形态学操作连接边缘
+    let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+    cv.dilate(edges, edges, kernel);
+    kernel.delete();
+    
+    // 7. 查找轮廓
+    contours.delete(); // 清理旧数据
+    contours = new cv.MatVector();
+    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    
+    // 8. 重新绘制原图
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    
+    // 9. 分析并高亮有直边的拼图块
+    let foundCount = 0;
+    for (let i = 0; i < contours.size(); i++) {
+      let contour = contours.get(i);
+      let area = cv.contourArea(contour);
+      
+      // 过滤太小或太大的轮廓
+      if (area < 1000 || area > canvas.width * canvas.height * 0.3) {
+        continue;
+      }
+      
+      // 检测是否有直边
+      if (hasStraightEdge(contour)) {
+        foundCount++;
+        // 绘制轮廓
+        drawContour(contour, 'rgba(0, 255, 0, 0.6)', 4);
+        
+        // 填充半透明
+        ctx.fillStyle = 'rgba(0, 255, 0, 0.15)';
+        ctx.beginPath();
+        for (let j = 0; j < contour.data32S.length; j += 2) {
+          let x = contour.data32S[j];
+          let y = contour.data32S[j + 1];
+          if (j === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.fill();
+      }
     }
+    
+    // 更新状态
+    statusDiv.textContent = `检测到 ${foundCount} 个边块`;
+    
+  } catch (e) {
+    console.error('处理错误:', e);
+    statusDiv.textContent = '处理错误: ' + e.message;
   }
-
-  cv.imshow(canvas, src);
-
-  contours.delete();
-  hierarchy.delete();
 }
 
-// 简化直线性判断（安全 iPhone）
-function hasStraightApprox(contour) {
-  let step = 20;
-  let eps = 2.0;
-
-  for (let i = 0; i + step < contour.total(); i += step) {
-    let p0 = contour.get(i);
-    let p1 = contour.get(i + step);
-
-    let dx = p1.x - p0.x;
-    let dy = p1.y - p0.y;
-    let len = Math.hypot(dx, dy);
-    if (len < 30) continue;
-
-    let total = 0;
-    for (let j = 0; j < step; j++) {
-      let p = contour.get(i + j);
-      let d = Math.abs(dy * (p.x - p0.x) - dx * (p.y - p0.y)) / len;
-      total += d;
+// 检测轮廓是否有直边
+function hasStraightEdge(contour) {
+  // 使用多边形近似
+  let approx = new cv.Mat();
+  let perimeter = cv.arcLength(contour, true);
+  cv.approxPolyDP(contour, approx, 0.02 * perimeter, true);
+  
+  let hasStrait = false;
+  
+  // 如果近似后有4个或更多顶点,检查是否有长直边
+  if (approx.rows >= 4) {
+    for (let i = 0; i < approx.rows; i++) {
+      let p1 = { x: approx.data32S[i * 2], y: approx.data32S[i * 2 + 1] };
+      let p2 = { x: approx.data32S[((i + 1) % approx.rows) * 2], 
+                 y: approx.data32S[((i + 1) % approx.rows) * 2 + 1] };
+      
+      let edgeLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      
+      // 如果边长超过阈值,认为是直边
+      if (edgeLen > perimeter * 0.15) {
+        hasStrait = true;
+        break;
+      }
     }
-    if (total / step < eps) return true;
   }
-  return false;
+  
+  approx.delete();
+  return hasStrait;
 }
+
+// 绘制轮廓
+function drawContour(contour, color, width) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  
+  for (let i = 0; i < contour.data32S.length; i += 2) {
+    let x = contour.data32S[i];
+    let y = contour.data32S[i + 1];
+    
+    if (i === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  }
+  
+  ctx.closePath();
+  ctx.stroke();
+}
+
+// 清理资源
+window.addEventListener('beforeunload', () => {
+  if (processingInterval) clearInterval(processingInterval);
+  if (src) src.delete();
+  if (gray) gray.delete();
+  if (edges) edges.delete();
+  if (contours) contours.delete();
+  if (hierarchy) hierarchy.delete();
+});
+
+// 页面加载时初始化
+loadOpenCV().catch(e => {
+  statusDiv.textContent = 'OpenCV 加载失败: ' + e.message;
+  alert('OpenCV 加载失败，请刷新页面重试');
+});
 </script>
-
 </body>
 </html>
- 
