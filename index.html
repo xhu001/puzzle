@@ -1,4 +1,4 @@
- <!DOCTYPE html>
+<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
@@ -33,17 +33,57 @@ button {
 button:active {
   background: #0051D5;
 }
-#status {
+#controls {
   position: fixed;
   top: 80px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 10px;
+  right: 10px;
+  z-index: 10;
+  display: none;
+}
+#controls.active {
+  display: block;
+}
+.control-group {
+  background: rgba(0,0,0,0.8);
+  padding: 10px;
+  margin-bottom: 5px;
+  border-radius: 8px;
   color: white;
-  background: rgba(0,0,0,0.7);
-  padding: 8px 16px;
+  font-size: 12px;
+}
+.control-group label {
+  display: block;
+  margin-bottom: 5px;
+}
+.control-group input[type="range"] {
+  width: 100%;
+}
+.toggle-btn {
+  background: #444;
+  border: none;
+  color: white;
+  padding: 8px 12px;
   border-radius: 4px;
+  font-size: 12px;
+  margin-right: 5px;
+  margin-top: 5px;
+}
+.toggle-btn.active {
+  background: #007AFF;
+}
+#status {
+  position: fixed;
+  bottom: 20px;
+  left: 10px;
+  right: 10px;
+  color: white;
+  background: rgba(0,0,0,0.8);
+  padding: 12px;
+  border-radius: 8px;
   font-size: 14px;
   z-index: 10;
+  text-align: center;
 }
 canvas { 
   position: absolute; 
@@ -61,6 +101,28 @@ video {
 <body>
 <div id="container">
   <button id="start">启动摄像头</button>
+  
+  <div id="controls">
+    <div class="control-group">
+      <label>最小面积: <span id="minAreaVal">500</span>px²</label>
+      <input type="range" id="minArea" min="100" max="5000" value="500" step="100">
+    </div>
+    <div class="control-group">
+      <label>Canny 低阈值: <span id="cannyLowVal">30</span></label>
+      <input type="range" id="cannyLow" min="10" max="100" value="30" step="5">
+    </div>
+    <div class="control-group">
+      <label>Canny 高阈值: <span id="cannyHighVal">100</span></label>
+      <input type="range" id="cannyHigh" min="50" max="200" value="100" step="10">
+    </div>
+    <div class="control-group">
+      显示模式:
+      <button class="toggle-btn active" data-mode="normal">正常</button>
+      <button class="toggle-btn" data-mode="edges">边缘</button>
+      <button class="toggle-btn" data-mode="contours">所有轮廓</button>
+    </div>
+  </div>
+  
   <div id="status">等待 OpenCV 加载...</div>
   <video id="video" playsinline muted autoplay></video>
   <canvas id="canvas"></canvas>
@@ -72,13 +134,47 @@ let streaming = false;
 let processingInterval = null;
 
 // OpenCV Mats
-let src, gray, edges, contours, hierarchy;
+let src, gray, edges, blurred;
+
+// 参数
+let params = {
+  minArea: 500,
+  cannyLow: 30,
+  cannyHigh: 100,
+  displayMode: 'normal' // 'normal', 'edges', 'contours'
+};
 
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
 const startBtn = document.getElementById("start");
 const statusDiv = document.getElementById("status");
+const controlsDiv = document.getElementById("controls");
+
+// 控制参数
+document.getElementById("minArea").oninput = function() {
+  params.minArea = parseInt(this.value);
+  document.getElementById("minAreaVal").textContent = this.value;
+};
+
+document.getElementById("cannyLow").oninput = function() {
+  params.cannyLow = parseInt(this.value);
+  document.getElementById("cannyLowVal").textContent = this.value;
+};
+
+document.getElementById("cannyHigh").oninput = function() {
+  params.cannyHigh = parseInt(this.value);
+  document.getElementById("cannyHighVal").textContent = this.value;
+};
+
+// 显示模式切换
+document.querySelectorAll('.toggle-btn').forEach(btn => {
+  btn.onclick = function() {
+    document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+    this.classList.add('active');
+    params.displayMode = this.dataset.mode;
+  };
+});
 
 // 动态加载 OpenCV.js
 function loadOpenCV() {
@@ -88,7 +184,6 @@ function loadOpenCV() {
     script.async = true;
     
     script.onload = () => {
-      // OpenCV.js 需要额外的初始化时间
       if (typeof cv !== 'undefined') {
         cv.onRuntimeInitialized = () => {
           opencvReady = true;
@@ -130,6 +225,7 @@ startBtn.onclick = async () => {
     };
     
     startBtn.style.display = 'none';
+    controlsDiv.classList.add('active');
     
   } catch (e) {
     statusDiv.textContent = '摄像头错误: ' + e.message;
@@ -139,25 +235,21 @@ startBtn.onclick = async () => {
 
 // 视频开始播放
 video.addEventListener("playing", () => {
-  // 设置 canvas 尺寸
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   
-  statusDiv.textContent = `检测中 (${canvas.width}x${canvas.height})`;
+  statusDiv.textContent = `初始化中 (${canvas.width}x${canvas.height})`;
   
-  // 初始化 OpenCV Mats
   try {
     src = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC4);
     gray = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC1);
     edges = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC1);
-    contours = new cv.MatVector();
-    hierarchy = new cv.Mat();
+    blurred = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC1);
     
     streaming = true;
     
-    // 使用 setInterval，在 iPhone Safari 上更稳定
     if (processingInterval) clearInterval(processingInterval);
-    processingInterval = setInterval(processFrame, 100); // 10 FPS
+    processingInterval = setInterval(processFrame, 100);
     
   } catch (e) {
     statusDiv.textContent = '初始化错误: ' + e.message;
@@ -168,102 +260,131 @@ function processFrame() {
   if (!streaming || !opencvReady) return;
   
   try {
-    // 1. 绘制视频帧到 canvas
+    // 读取视频帧
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    
-    // 2. 读取图像数据
     cv.imread(canvas, src);
     
-    // 3. 转灰度
+    // 转灰度
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
     
-    // 4. 高斯模糊减少噪声
-    cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
+    // 高斯模糊
+    cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
     
-    // 5. Canny 边缘检测
-    cv.Canny(gray, edges, 50, 150);
+    // Canny 边缘检测
+    cv.Canny(blurred, edges, params.cannyLow, params.cannyHigh);
     
-    // 6. 形态学操作连接边缘
+    // 形态学闭运算
     let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-    cv.dilate(edges, edges, kernel);
+    cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel);
     kernel.delete();
     
-    // 7. 查找轮廓
-    contours.delete(); // 清理旧数据
-    contours = new cv.MatVector();
+    // 显示边缘模式
+    if (params.displayMode === 'edges') {
+      cv.imshow(canvas, edges);
+      statusDiv.textContent = '边缘检测视图';
+      return;
+    }
+    
+    // 查找轮廓
+    let contours = new cv.MatVector();
+    let hierarchy = new cv.Mat();
     cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
     
-    // 8. 重新绘制原图
+    // 重新绘制原图
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    // 9. 分析并高亮有直边的拼图块
-    let foundCount = 0;
-    for (let i = 0; i < contours.size(); i++) {
+    let totalContours = contours.size();
+    let validContours = 0;
+    let straightEdgeCount = 0;
+    
+    for (let i = 0; i < totalContours; i++) {
       let contour = contours.get(i);
       let area = cv.contourArea(contour);
       
-      // 过滤太小或太大的轮廓
-      if (area < 1000 || area > canvas.width * canvas.height * 0.3) {
+      // 面积过滤
+      if (area < params.minArea) {
         continue;
       }
       
-      // 检测是否有直边
-      if (hasStraightEdge(contour)) {
-        foundCount++;
-        // 绘制轮廓
-        drawContour(contour, 'rgba(0, 255, 0, 0.6)', 4);
+      validContours++;
+      
+      // 显示所有轮廓模式
+      if (params.displayMode === 'contours') {
+        drawContour(contour, 'rgba(255, 255, 0, 0.8)', 2);
+        continue;
+      }
+      
+      // 检测直边
+      if (hasStraightEdge(contour, area)) {
+        straightEdgeCount++;
+        drawContour(contour, 'rgba(0, 255, 0, 0.9)', 4);
         
-        // 填充半透明
-        ctx.fillStyle = 'rgba(0, 255, 0, 0.15)';
-        ctx.beginPath();
-        for (let j = 0; j < contour.data32S.length; j += 2) {
-          let x = contour.data32S[j];
-          let y = contour.data32S[j + 1];
-          if (j === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.closePath();
-        ctx.fill();
+        // 半透明填充
+        ctx.fillStyle = 'rgba(0, 255, 0, 0.2)';
+        fillContour(contour);
       }
     }
     
-    // 更新状态
-    statusDiv.textContent = `检测到 ${foundCount} 个边块`;
+    // 更新状态信息
+    let statusText = `总轮廓: ${totalContours} | 有效: ${validContours}`;
+    if (params.displayMode === 'normal') {
+      statusText += ` | 边块: ${straightEdgeCount}`;
+    }
+    statusDiv.textContent = statusText;
+    
+    contours.delete();
+    hierarchy.delete();
     
   } catch (e) {
     console.error('处理错误:', e);
-    statusDiv.textContent = '处理错误: ' + e.message;
+    statusDiv.textContent = '错误: ' + e.message;
   }
 }
 
-// 检测轮廓是否有直边
-function hasStraightEdge(contour) {
-  // 使用多边形近似
+// 检测是否有直边 - 更宽松的算法
+function hasStraightEdge(contour, area) {
   let approx = new cv.Mat();
   let perimeter = cv.arcLength(contour, true);
-  cv.approxPolyDP(contour, approx, 0.02 * perimeter, true);
   
-  let hasStrait = false;
+  // 多边形近似
+  cv.approxPolyDP(contour, approx, 0.015 * perimeter, true);
   
-  // 如果近似后有4个或更多顶点,检查是否有长直边
-  if (approx.rows >= 4) {
-    for (let i = 0; i < approx.rows; i++) {
-      let p1 = { x: approx.data32S[i * 2], y: approx.data32S[i * 2 + 1] };
-      let p2 = { x: approx.data32S[((i + 1) % approx.rows) * 2], 
-                 y: approx.data32S[((i + 1) % approx.rows) * 2 + 1] };
+  let hasStraight = false;
+  let vertices = approx.rows;
+  
+  // 如果顶点数在 4-12 之间（拼图块通常是这个范围）
+  if (vertices >= 4 && vertices <= 12) {
+    // 计算边长
+    for (let i = 0; i < vertices; i++) {
+      let x1 = approx.data32S[i * 2];
+      let y1 = approx.data32S[i * 2 + 1];
+      let x2 = approx.data32S[((i + 1) % vertices) * 2];
+      let y2 = approx.data32S[((i + 1) % vertices) * 2 + 1];
       
-      let edgeLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      let edgeLen = Math.hypot(x2 - x1, y2 - y1);
       
-      // 如果边长超过阈值,认为是直边
-      if (edgeLen > perimeter * 0.15) {
-        hasStrait = true;
+      // 如果有一条边长度超过周长的 12%，认为是直边
+      if (edgeLen > perimeter * 0.12) {
+        hasStraight = true;
         break;
       }
     }
   }
   
+  // 备用方法：检查长宽比
+  if (!hasStraight) {
+    let rect = cv.minAreaRect(contour);
+    let aspectRatio = Math.max(rect.size.width, rect.size.height) / 
+                      Math.min(rect.size.width, rect.size.height);
+    
+    // 如果长宽比接近 1（方形）且面积足够大，可能是边块
+    if (aspectRatio < 2.5 && area > params.minArea * 2) {
+      hasStraight = true;
+    }
+  }
+  
   approx.delete();
-  return hasStrait;
+  return hasStraight;
 }
 
 // 绘制轮廓
@@ -287,14 +408,26 @@ function drawContour(contour, color, width) {
   ctx.stroke();
 }
 
+// 填充轮廓
+function fillContour(contour) {
+  ctx.beginPath();
+  for (let i = 0; i < contour.data32S.length; i += 2) {
+    let x = contour.data32S[i];
+    let y = contour.data32S[i + 1];
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
 // 清理资源
 window.addEventListener('beforeunload', () => {
   if (processingInterval) clearInterval(processingInterval);
   if (src) src.delete();
   if (gray) gray.delete();
   if (edges) edges.delete();
-  if (contours) contours.delete();
-  if (hierarchy) hierarchy.delete();
+  if (blurred) blurred.delete();
 });
 
 // 页面加载时初始化
