@@ -2,28 +2,46 @@
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body { margin:0; background:black; }
+button {
+  position:fixed; top:10px; left:50%;
+  transform:translateX(-50%);
+  font-size:18px;
+}
+canvas { width:100vw; height:auto; }
+</style>
 </head>
-<body style="margin:0;background:black">
+<body>
 
-<button id="btn" style="font-size:20px">Start Camera</button>
-<br><br>
-
-<video id="video"
-       autoplay
-       playsinline
-       muted
-       style="width:100vw;height:auto"></video>
+<button id="start">Start Camera</button>
+<video id="video" playsinline muted></video>
+<canvas id="canvas"></canvas>
 
 <script>
-document.getElementById("btn").onclick = async () => {
-  const video = document.getElementById("video");
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+document.getElementById("start").onclick = async () => {
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: "environment" },
     audio: false
   });
   video.srcObject = stream;
-  video.play();
+  await video.play();
 };
+
+video.addEventListener("playing", () => {
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+
+  function draw() {
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    requestAnimationFrame(draw);
+  }
+  draw();
+});
 </script>
 
 </body>
