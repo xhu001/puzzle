@@ -1,90 +1,64 @@
-<!DOCTYPE html>
+ <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
-<title>拼图检测 - OpenCV.js 版 (≈2×2cm方块)</title>
+<title>拼圖直邊檢測 - OpenCV.js</title>
 
-<!-- OpenCV.js 官方最新稳定版 (2025-2026 常用版本) -->
 <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();"></script>
 
 <style>
-  body {
-    margin: 0;
-    padding: 12px;
-    font-family: -apple-system, BlinkMacOSystemFont, sans-serif;
-    background: #000;
-    color: #eee;
-  }
-  h2 { margin: 0.6em 0; text-align: center; }
-  #container { display: flex; flex-direction: column; align-items: center; }
-  video, canvas { 
-    max-width: 100%; 
-    border: 2px solid #333; 
-    border-radius: 10px; 
-    background: #111;
-  }
-  .btn {
-    margin: 10px 8px;
-    padding: 12px 28px;
-    font-size: 17px;
-    border: none;
-    border-radius: 8px;
-    background: #0066ff;
-    color: white;
-  }
-  .btn:active { background: #0050cc; }
-  #status {
-    margin: 12px 0;
-    padding: 8px;
-    background: rgba(0,0,0,0.5);
-    border-radius: 8px;
-    min-height: 1.4em;
-  }
+  body { margin:0; padding:12px; font-family:-apple-system,sans-serif; background:#000; color:#eee; }
+  h2 { text-align:center; margin:0.6em 0; }
+  #container { display:flex; flex-direction:column; align-items:center; }
+  video, canvas { max-width:100%; border:2px solid #333; border-radius:10px; background:#111; }
+  .btn { margin:10px 8px; padding:12px 28px; font-size:17px; border:none; border-radius:8px; background:#0066ff; color:white; }
+  .btn:active { background:#0050cc; }
+  #status { margin:12px 0; padding:8px; background:rgba(0,0,0,0.5); border-radius:8px; min-height:1.4em; }
 </style>
 </head>
 <body>
 
 <div id="container">
-  <h2>拼图块检测 ≈2×2cm (OpenCV.js)</h2>
+  <h2>檢測有直邊的拼圖塊（邊緣件）</h2>
   
   <video id="video" autoplay playsinline muted></video>
   <canvas id="canvas" style="display:none"></canvas>
   <canvas id="output"></canvas>
   
   <div>
-    <button class="btn" id="startBtn">开启后置摄像头</button>
+    <button class="btn" id="startBtn">開啟後置攝影機</button>
     <button class="btn" id="captureBtn">拍照</button>
-    <button class="btn" id="detectBtn">检测方块</button>
+    <button class="btn" id="detectBtn" disabled>檢測直邊</button>
   </div>
   
-  <div id="status">等待 OpenCV.js 加载...</div>
+  <div id="status">等待 OpenCV.js 載入...</div>
 </div>
 
 <script>
-// 全局变量
+// ================================================
 let cvReady = false;
 let video, canvas, ctx, outputCanvas, outCtx;
 let stream = null;
 
 const STATUS = document.getElementById('status');
 
-// 参数（针对 ≈2×2cm 方块，手机拍照常见分辨率）
-const MIN_AREA_RATIO   = 0.0006;    // 最小面积占比
-const MAX_AREA_RATIO   = 0.025;     // 最大面积占比（防大块噪声）
-const ASPECT_TOLERANCE = 0.30;      // 长宽比偏离 1 的最大容忍（越小越严格）
-const APPROX_EPSILON   = 0.022;     // 多边形逼近精度 (相对周长)
-const MIN_CONTOUR_SIZE = 40;        // 轮廓点数下限，防噪声
+// 主要參數（可依實際拼圖大小調整）
+const MIN_AREA_RATIO   = 0.0007;
+const MAX_AREA_RATIO   = 0.03;
+const ASPECT_TOLERANCE = 0.35;
+const APPROX_EPSILON   = 0.018;     // 全輪廓逼近精度
+const SIDE_APPROX_EPS  = 0.035;     // 每邊單獨逼近的精度（較寬鬆）
+const MIN_SIDE_POINTS  = 60;        // 單邊至少要有這麼多點才判斷
 
 function onOpenCvReady() {
   cv['onRuntimeInitialized'] = () => {
     cvReady = true;
-    STATUS.textContent = 'OpenCV.js 已加载完成！可以开始使用了～';
+    STATUS.textContent = 'OpenCV.js 已載入完成～可以開始使用了';
     document.getElementById('detectBtn').disabled = false;
   };
 }
 
-// 初始化
 window.onload = () => {
   video = document.getElementById('video');
   canvas = document.getElementById('canvas');
@@ -94,41 +68,27 @@ window.onload = () => {
 
   document.getElementById('startBtn').onclick = startCamera;
   document.getElementById('captureBtn').onclick = capture;
-  document.getElementById('detectBtn').onclick = detectSquares;
-  document.getElementById('detectBtn').disabled = true;
+  document.getElementById('detectBtn').onclick = detectStraightEdges;
 };
 
 async function startCamera() {
-  if (!cvReady) {
-    STATUS.textContent = "OpenCV.js 还在加载，请稍等...";
-    return;
-  }
-
+  if (!cvReady) return alert("OpenCV 還在載入，請稍候...");
+  
   try {
-    if (stream) stream.getTracks().forEach(t => t.stop());
-
+    if (stream) stream.getTracks().forEach(t=>t.stop());
     stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: "environment",
-        width: { ideal: 1280 },
-        height: { ideal: 960 }
-      }
+      video: { facingMode: "environment", width: {ideal:1280}, height:{ideal:960} }
     });
-
     video.srcObject = stream;
-    STATUS.textContent = "摄像头已开启 → 请对准拼图后按「拍照」";
-  } catch (e) {
-    STATUS.textContent = "摄像头开启失败: " + e.message;
+    STATUS.textContent = "攝影機已開啟 → 對準拼圖後按「拍照」";
+  } catch(e) {
+    STATUS.textContent = "無法開啟攝影機：" + e.message;
   }
 }
 
 function capture() {
-  if (!stream) {
-    alert("请先开启摄像头");
-    return;
-  }
-
-  // 设置 canvas 尺寸与视频一致
+  if (!stream) return alert("請先開啟攝影機");
+  
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   outputCanvas.width = canvas.width;
@@ -136,107 +96,120 @@ function capture() {
 
   ctx.drawImage(video, 0, 0);
   outCtx.drawImage(canvas, 0, 0);
-
-  STATUS.textContent = `已拍照！分辨率: ${canvas.width}×${canvas.height}`;
+  STATUS.textContent = `已拍照！  ${canvas.width}×${canvas.height}`;
 }
 
-function detectSquares() {
-  if (!cvReady) {
-    STATUS.textContent = "OpenCV.js 尚未准备好...";
-    return;
-  }
-  if (canvas.width === 0) {
-    STATUS.textContent = "请先拍照！";
+function detectStraightEdges() {
+  if (!cvReady || canvas.width === 0) {
+    STATUS.textContent = "請先拍照！";
     return;
   }
 
-  STATUS.textContent = "正在检测... (可能需要几秒)";
+  STATUS.textContent = "正在分析直邊... (可能需要幾秒)";
 
-  // 1. 准备 OpenCV Mat
   let src = cv.imread(canvas);
   let gray = new cv.Mat();
   let blurred = new cv.Mat();
-  let edges = new cv.Mat();
   let thresh = new cv.Mat();
 
-  // 2. 预处理
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-  cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-  
-  // 自适应阈值通常对拼图效果更好
+  cv.GaussianBlur(gray, blurred, new cv.Size(5,5), 0);
   cv.adaptiveThreshold(blurred, thresh, 255,
-    cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-    cv.THRESH_BINARY_INV, 11, 2);
+    cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
 
-  // 3. 找轮廓
   let contours = new cv.MatVector();
   let hierarchy = new cv.Mat();
-  cv.findContours(thresh, contours, hierarchy,
-    cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
 
-  // 4. 清空上一帧结果，只保留原始拍照图像
+  // 先把原始拍照畫回去，準備標記
   outCtx.drawImage(canvas, 0, 0);
 
-  let count = 0;
+  let edgePieceCount = 0;
 
-  // 5. 遍历所有轮廓，进行方块过滤
   for (let i = 0; i < contours.size(); ++i) {
     let cnt = contours.get(i);
     let area = cv.contourArea(cnt);
+    if (area < 100) continue;
 
-    if (area < 100) continue; // 太小直接跳过
-
-    // 周长 → 用于相对精度逼近
     let perimeter = cv.arcLength(cnt, true);
     let approx = new cv.Mat();
     cv.approxPolyDP(cnt, approx, APPROX_EPSILON * perimeter, true);
 
-    // 只保留近似四边形（四角形）
-    if (approx.rows !== 4) {
-      approx.delete();
-      continue;
-    }
+    if (approx.rows < 4) { approx.delete(); continue; }
 
-    // 计算边界框
     let rect = cv.boundingRect(cnt);
-    let aspectRatio = Math.abs(rect.width / rect.height - 1);
-
+    let aspect = Math.abs(rect.width / rect.height - 1);
     let areaRatio = area / (src.rows * src.cols);
 
-    // 核心过滤条件
-    if (areaRatio < MIN_AREA_RATIO || areaRatio > MAX_AREA_RATIO) {
-      approx.delete();
-      continue;
-    }
-    if (aspectRatio > ASPECT_TOLERANCE) {
+    if (areaRatio < MIN_AREA_RATIO || areaRatio > MAX_AREA_RATIO ||
+        aspect > ASPECT_TOLERANCE) {
       approx.delete();
       continue;
     }
 
-    // 画高亮框（黄色 + 粗线 + 半透明）
-    let color = new cv.Scalar(255, 255, 0, 220); // 黄 + 透明度
-    let thickness = Math.max(4, Math.round(canvas.width / 320)); // 自适应粗细
+    // ── 重點：開始檢查是否有直邊 ─────────────────────────────
+    let hasStraightEdge = false;
+    let points = cnt.data32S; // int32 陣列 [x1,y1, x2,y2, ...]
 
-    cv.rectangle(outCtx.canvas, 
-      {x: rect.x, y: rect.y},
-      {x: rect.x + rect.width, y: rect.y + rect.height},
-      color, thickness);
+    // 粗略分成四段（簡單平均分法，實際可改用角點檢測更精確）
+    const n = points.length / 2;
+    const segLen = Math.floor(n / 4);
+    const segments = [
+      {start: 0,           end: segLen},
+      {start: segLen,      end: segLen*2},
+      {start: segLen*2,    end: segLen*3},
+      {start: segLen*3,    end: n}
+    ];
 
-    // 可选：画中心点（红色小圆）
-    // let centerX = rect.x + rect.width / 2;
-    // let centerY = rect.y + rect.height / 2;
-    // cv.circle(outCtx.canvas, {x:centerX, y:centerY}, 6, [255,0,0,255], -1);
+    for (let seg of segments) {
+      let segPoints = [];
+      for (let j = seg.start; j < seg.end; j++) {
+        segPoints.push([points[j*2], points[j*2+1]]);
+      }
+      // 最後一點連回第一點（閉合）
+      segPoints.push(segPoints[0]);
 
-    count++;
+      let segMat = cv.matFromArray(segPoints.length, 1, cv.CV_32SC2, [].concat(...segPoints));
+      let segApprox = new cv.Mat();
+      let segPeri = cv.arcLength(segMat, true);
+      cv.approxPolyDP(segMat, segApprox, SIDE_APPROX_EPS * segPeri, true);
+
+      // 如果逼近後只剩 2 個點 → 這段非常接近直線
+      if (segApprox.rows <= 2 && segMat.rows > MIN_SIDE_POINTS) {
+        hasStraightEdge = true;
+      }
+
+      segMat.delete();
+      segApprox.delete();
+    }
+
+    // ── 畫框 ────────────────────────────────
+    let color;
+    if (hasStraightEdge) {
+      // 有直邊 → 紅色 + 較粗
+      color = new cv.Scalar(255, 80, 80, 220); // 紅
+      edgePieceCount++;
+      cv.rectangle(outCtx.canvas,
+        {x:rect.x, y:rect.y},
+        {x:rect.x+rect.width, y:rect.y+rect.height},
+        color, Math.max(6, Math.round(canvas.width/280)));
+    } else {
+      // 普通塊 → 黃色細框
+      color = new cv.Scalar(255, 255, 0, 180);
+      cv.rectangle(outCtx.canvas,
+        {x:rect.x, y:rect.y},
+        {x:rect.x+rect.width, y:rect.y+rect.height},
+        color, 3);
+    }
+
     approx.delete();
   }
 
-  // 释放内存（非常重要！）
-  src.delete(); gray.delete(); blurred.delete();
-  edges.delete(); thresh.delete();
+  // 清理
+  src.delete(); gray.delete(); blurred.delete(); thresh.delete();
   contours.delete(); hierarchy.delete();
 
-  STATUS.textContent = `检测完成！找到约 ${count} 个疑似 2×2cm 方块`;
+  STATUS.textContent = `分析完成！ 找到 ${edgePieceCount} 個疑似有直邊的邊緣塊（紅色標記）`;
 }
 </script>
 </body>
